@@ -108,3 +108,19 @@ pub unsafe extern "C" fn context_switch(_current_task: &mut TaskContext, _next_t
 extern "C"  {
     fn fpstate_switch(_current_fpstate: &mut FpState, _next_fpstate: &FpState);
 }
+
+/// Saved registers when a trap (exception) occurs.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TrapFrame {
+    /// General-purpose registers (R0..R30).
+    pub r: [usize; 31],
+    /// Stack Poiter
+    pub usp: usize,
+    /// Exception Link Register (ELR_EL1).
+    pub elr: usize,
+    /// Saved Process Status Register (SPSR_EL1).
+    pub spsr: usize,
+    /// Saved tpidr_el0.
+    pub tpidr_el0: usize,
+}

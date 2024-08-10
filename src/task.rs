@@ -1,9 +1,8 @@
 #[cfg(feature = "tls")]
 use crate::tls::TlsArea;
-
-use crate::{arch::TaskContext, TaskStack, TimeStat};
+use crate::{TaskStack, TimeStat};
 extern crate alloc;
-use alloc::{boxed::Box, string::String};
+use alloc::string::String;
 
 #[allow(unused_imports)]
 use core::{
@@ -11,7 +10,20 @@ use core::{
     fmt,
     sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, AtomicUsize, Ordering},
 };
-use memory_addr::{align_up_4k, VirtAddr};
+use memory_addr::VirtAddr;
+
+#[cfg(not(feature = "async"))]
+use {
+    alloc::boxed::Box,
+    crate::arch::TaskContext,
+    memory_addr::align_up_4k,
+};
+
+#[cfg(feature = "async")]
+use {
+    crate::context::Context as TaskContext,
+    core::future::Future,
+};
 
 /// A unique identifier for a thread.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -112,6 +124,7 @@ pub struct TaskInner {
     /// when the task exits.
     is_init: bool,
 
+    #[cfg(not(feature = "async"))]
     /// The entry point of the task
     ///
     /// For Unikernel, it is the entry point of the spawned task
@@ -141,7 +154,10 @@ pub struct TaskInner {
     exit_code: AtomicI32,
 
     /// The kernel stack of the task
+    #[cfg(not(feature = "async"))]
     kstack: Option<TaskStack>,
+    #[cfg(feature = "async")]
+    kstack: UnsafeCell<Option<TaskStack>>,
 
     /// The context of the task
     ctx: UnsafeCell<TaskContext>,
@@ -214,12 +230,20 @@ impl TaskInner {
     /// 获取内核栈栈顶
     #[inline]
     pub fn get_kernel_stack_top(&self) -> Option<usize> {
+        #[cfg(not(feature = "async"))]
         if let Some(kstack) = &self.kstack {
             return Some(kstack.top().as_usize());
+        }
+        #[cfg(feature = "async")]
+        {
+            if let Some(kstack) = unsafe { &*self.kstack.get() } {
+                return Some(kstack.top().as_usize());
+            }
         }
         None
     }
 
+    #[cfg(not(feature = "async"))]
     #[cfg(feature = "monolithic")]
     /// Create a new task with the given entry function and stack size.
     pub fn new<F>(
@@ -256,6 +280,7 @@ impl TaskInner {
         t
     }
 
+    #[cfg(not(feature = "async"))]
     #[cfg(not(feature = "monolithic"))]
     /// Create a new task with the given entry function and stack size.
     pub fn new<F>(
@@ -508,13 +533,17 @@ impl TaskInner {
             name: UnsafeCell::new(name),
             is_idle: false,
             is_init: false,
+            #[cfg(not(feature = "async"))]
             entry: None,
             #[cfg(feature = "preempt")]
             need_resched: AtomicBool::new(false),
             #[cfg(feature = "preempt")]
             preempt_disable_count: AtomicUsize::new(0),
             exit_code: AtomicI32::new(0),
+            #[cfg(not(feature = "async"))]
             kstack: None,
+            #[cfg(feature = "async")]
+            kstack: UnsafeCell::new(None),
             ctx: UnsafeCell::new(TaskContext::new()),
             #[cfg(feature = "tls")]
             tls: TlsArea::alloc(tls_area.0, tls_area.1),
@@ -652,6 +681,7 @@ impl TaskInner {
         self.exit_code.store(code, Ordering::Release)
     }
 
+    #[cfg(not(feature = "async"))]
     /// Get the task entry
     #[inline]
     pub fn get_entry(&self) -> Option<*mut dyn FnOnce()> {
@@ -694,5 +724,86 @@ impl fmt::Debug for TaskInner {
 impl Drop for TaskInner {
     fn drop(&mut self) {
         log::debug!("task drop: {}", self.id_name());
+    }
+}
+
+#[cfg(feature = "async")]
+impl TaskInner {
+    pub fn new<F, T>(
+        fut: F,
+        name: String,
+        _stack_size: usize,
+        #[cfg(feature = "monolithic")] process_id: u64,
+        #[cfg(feature = "monolithic")] page_table_token: usize,
+        #[cfg(feature = "tls")] tls_area: (usize, usize),
+    ) -> TaskInner
+    where
+        F: FnOnce() -> T,
+        T: Future<Output = i32> + 'static + Send,
+    {
+        let mut t = Self::new_common(
+            TaskId::new(),
+            name,
+            #[cfg(feature = "tls")]
+            tls_area,
+        );
+        log::debug!("new task: {}", t.id_name());
+        t.ctx.get_mut().init_future(fut);
+
+        // log::warn!("new task ctx type {:?}", t.get_ctx_type());
+
+        #[cfg(feature = "monolithic")]
+        {
+            t.process_id.store(process_id, Ordering::Release);
+            t.page_table_token = UnsafeCell::new(page_table_token);
+        }        
+
+        if unsafe { &*t.name.get() }.as_str() == "idle" {
+            // FIXME: name 现已被用作 prctl 使用的程序名，应另选方式判断 idle 进程
+            t.is_idle = true;
+        }
+        t
+    }
+
+    /// Set occupied stack
+    pub fn set_occupied_stack(&self, stack: TaskStack) {
+        let kstack = unsafe { &mut *self.kstack.get() };
+        assert!(kstack.is_none(), "{} is already occupied", self.id_name());
+        kstack.replace(stack);
+    }
+
+    /// Pick occupied stack
+    pub fn pick_occupied_stack(&self) -> TaskStack {
+        let kstack = unsafe { &mut *self.kstack.get() };
+        assert!(kstack.is_some());
+        kstack.take().unwrap()
+    }
+
+    /// Set the context type
+    pub fn set_ctx_type(&self, ctx_type: crate::ContextType) {
+        let ctx = unsafe { &mut *self.ctx.get() };
+        ctx.set_ctx_type(ctx_type);
+    }
+
+    /// Set the context trap_frame
+    pub fn set_ctx_trap_frame(&self, tf: usize) {
+        let ctx = unsafe { &mut *self.ctx.get() };
+        ctx.set_trap_frame(tf as *mut crate::arch::TrapFrame);
+    }
+
+    /// Get the task context type
+    pub fn get_ctx_type(&self) -> crate::ContextType {
+        unsafe { (*self.ctx.get()).ctx_type }
+    }
+
+    /// Check whether the task has occupied a stack
+    pub fn check_stack(&self) -> bool {
+        unsafe { &*self.kstack.get() }.is_some()
+    }
+
+    /// Init user task kstack
+    pub fn init_user_kstack(&self, stack_size: usize) {
+        let kstack = TaskStack::alloc(memory_addr::align_up_4k(stack_size));
+        self.set_occupied_stack(kstack);
     }
 }

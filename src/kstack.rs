@@ -3,7 +3,8 @@ use core::{alloc::Layout, ptr::NonNull};
 
 use memory_addr::VirtAddr;
 
-pub(crate) struct TaskStack {
+#[derive(Debug)]
+pub struct TaskStack {
     ptr: NonNull<u8>,
     layout: Layout,
 }
@@ -26,6 +27,14 @@ impl TaskStack {
     // pub fn get_first_trap_frame(&self) -> *mut TrapFrame {
     //     (self.top().as_usize() - core::mem::size_of::<TrapFrame>()) as *mut TrapFrame
     // }
+
+    pub fn boot_stack(bottom: usize, size: usize) -> Self {
+        let layout = Layout::from_size_align(size, 16).unwrap();
+        Self {
+            ptr: NonNull::new(bottom as *mut u8).unwrap(),
+            layout,
+        }
+    }
 }
 
 impl Drop for TaskStack {
