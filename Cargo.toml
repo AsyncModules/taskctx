@@ -14,6 +14,7 @@ multitask = []
 tls = []
 monolithic = []
 async= []
+stat = []
 
 default = []
 [dependencies]

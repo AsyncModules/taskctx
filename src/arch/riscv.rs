@@ -189,6 +189,51 @@ extern "C" {
     fn run_new_schedule();
 }
 
+#[cfg(feature = "stat")]
+extern "C"{
+    fn context_save_count(start: u64, end: u64);
+    static mut CONTEXT_LOAD_START: u64;
+    static mut CONTEXT_LOAD_END: u64;
+}
+
+#[cfg(feature = "stat")]
+#[naked]
+/// Save the current task's thread context.
+pub unsafe extern "C" fn save_context() {
+    asm!(
+        "
+        csrrs   a0, 0xc00, x0
+        addi    sp, sp, -{frame_size}
+        STR     ra, sp, 0
+        STR     sp, sp, 1
+        STR     s0, sp, 7
+        STR     s1, sp, 8
+        STR     s2, sp, 17
+        STR     s3, sp, 18
+        STR     s4, sp, 19
+        STR     s5, sp, 20
+        STR     s6, sp, 21
+        STR     s7, sp, 22
+        STR     s8, sp, 23
+        STR     s9, sp, 24
+        STR     s10, sp, 25
+        STR     s11, sp, 26
+        csrrs   a1, 0xc00, x0
+        call    {context_save_count}
+        mv      a0, sp
+        call    {change_stack}
+        mv      sp, a0
+        j       {run_new_schedule}
+        ",
+        frame_size = const TRAP_FRAME_SIZE,
+        change_stack = sym change_stack,
+        run_new_schedule = sym run_new_schedule,
+        context_save_count = sym context_save_count,
+        options(noreturn),
+    );
+}
+
+#[cfg(not(feature = "stat"))]
 #[naked]
 /// Save the current task's thread context.
 pub unsafe extern "C" fn save_context() {
@@ -221,6 +266,7 @@ pub unsafe extern "C" fn save_context() {
     );
 }
 
+#[cfg(not(feature = "stat"))]
 #[naked]
 /// Restore the current task's thread context.
 pub unsafe extern "C" fn restore_thread(ctx: &TrapFrame) {
@@ -244,6 +290,42 @@ pub unsafe extern "C" fn restore_thread(ctx: &TrapFrame) {
         ret
         ",
         frame_size = const TRAP_FRAME_SIZE,
+        options(noreturn),
+    );
+}
+
+#[cfg(feature = "stat")]
+#[naked]
+/// Restore the current task's thread context.
+pub unsafe extern "C" fn restore_thread(ctx: &TrapFrame) {
+    asm!(
+        "
+        la      a2, {CONTEXT_LOAD_START}
+        csrrs   a1, 0xc00, x0
+        STR     a1, a2, 0
+        LDR     ra, a0, 0
+        LDR     sp, a0, 1
+        LDR     s0, a0, 7
+        LDR     s1, a0, 8
+        LDR     s2, a0, 17
+        LDR     s3, a0, 18
+        LDR     s4, a0, 19
+        LDR     s5, a0, 20
+        LDR     s6, a0, 21
+        LDR     s7, a0, 22
+        LDR     s8, a0, 23
+        LDR     s9, a0, 24
+        LDR     s10, a0, 25
+        LDR     s11, a0, 26
+        addi    sp, sp, {frame_size}
+        csrrs   a1, 0xc00, x0
+        la      a2, {CONTEXT_LOAD_END}
+        STR     a1, a2, 0
+        ret
+        ",
+        frame_size = const TRAP_FRAME_SIZE,
+        CONTEXT_LOAD_START = sym CONTEXT_LOAD_START,
+        CONTEXT_LOAD_END = sym CONTEXT_LOAD_END,
         options(noreturn),
     );
 }
