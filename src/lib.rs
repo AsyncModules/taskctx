@@ -27,14 +27,14 @@ pub use stat::*;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "multitask")] {
-        #[cfg(feature = "async")]
-        mod context;
-        #[cfg(feature = "async")]
-        pub use context::*;
         mod kstack;
         pub use kstack::*;
         mod task;
         pub use task::*;
+        #[cfg(feature = "async")]
+        mod ctx;
+        #[cfg(feature = "async")]
+        pub use ctx::*;
     }
 }
 

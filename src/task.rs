@@ -21,7 +21,7 @@ use {
 
 #[cfg(feature = "async")]
 use {
-    crate::context::Context as TaskContext,
+    crate::ctx::Context as TaskContext,
     core::future::Future,
 };
 
@@ -767,9 +767,14 @@ impl TaskInner {
 
     /// Set occupied stack
     pub fn set_occupied_stack(&self, stack: TaskStack) {
+        let stack_top = stack.top().as_usize();
         let kstack = unsafe { &mut *self.kstack.get() };
         assert!(kstack.is_none(), "{} is already occupied", self.id_name());
         kstack.replace(stack);
+        unsafe { self.ctx.get().as_mut().unwrap().set_kstack_top(
+            #[cfg(not(feature = "monolithic"))] stack_top.into(),
+            #[cfg(feature = "monolithic")] (stack_top - crate::TRAP_FRAME_SIZE).into()
+        ) };
     }
 
     /// Pick occupied stack
@@ -781,19 +786,12 @@ impl TaskInner {
 
     /// Set the context type
     pub fn set_ctx_type(&self, ctx_type: crate::ContextType) {
-        let ctx = unsafe { &mut *self.ctx.get() };
-        ctx.set_ctx_type(ctx_type);
-    }
-
-    /// Set the context trap_frame
-    pub fn set_ctx_trap_frame(&self, tf: usize) {
-        let ctx = unsafe { &mut *self.ctx.get() };
-        ctx.set_trap_frame(tf as *mut crate::arch::TrapFrame);
+        unsafe { self.ctx.get().as_mut().unwrap().set_ctx_type(ctx_type) };
     }
 
     /// Get the task context type
     pub fn get_ctx_type(&self) -> crate::ContextType {
-        unsafe { (*self.ctx.get()).ctx_type }
+        unsafe { self.ctx.get().as_mut().unwrap().ctx_type }
     }
 
     /// Check whether the task has occupied a stack
