@@ -137,3 +137,50 @@ pub unsafe extern "C" fn context_switch(_current_task: &mut TaskContext, _next_t
         options(noreturn),
     )
 }
+
+#[cfg(feature = "future")]
+#[naked]
+/// Switch to the new context to run a coroutine.
+///
+/// # Safety
+///
+/// This function is unsafe because it directly manipulates the CPU registers.
+pub unsafe extern "C" fn restore_context(_next_task: &TaskContext) {
+    asm!(
+        "
+        // restore new context
+        LDR     s11, a0, 13
+        LDR     s10, a0, 12
+        LDR     s9, a0, 11
+        LDR     s8, a0, 10
+        LDR     s7, a0, 9
+        LDR     s6, a0, 8
+        LDR     s5, a0, 7
+        LDR     s4, a0, 6
+        LDR     s3, a0, 5
+        LDR     s2, a0, 4
+        LDR     s1, a0, 3
+        LDR     s0, a0, 2
+        LDR     sp, a0, 1
+        LDR     ra, a0, 0
+        ret",
+        options(noreturn),
+    )
+}
+
+#[cfg(feature = "future")]
+#[naked]
+/// Jump to the target function with the given stack pointer.
+///
+/// # Safety
+///
+/// This function is unsafe because it directly manipulates the CPU registers.
+pub unsafe extern "C" fn jump(ra: usize, sp: usize) {
+    asm!(
+        "
+        mv ra, a0
+        mv sp, a1
+        ret",
+        options(noreturn),
+    )
+}

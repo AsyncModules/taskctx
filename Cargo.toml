@@ -13,6 +13,8 @@ fp_simd = []
 multitask = []
 tls = []
 monolithic = []
+future= []
+
 default = []
 [dependencies]
 log = "0.4"
